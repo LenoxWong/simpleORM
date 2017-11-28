@@ -115,7 +115,9 @@ class Model(dict, metaclass=ModelMetaclass):
         sql = sql[:len(sql)-2]
         sql = cls.__select__ + sql
         rs = await SELECT(sql, tuple(format_v), 1)
-        return cls(**rs[0])
+        if len(rs) > 0:
+            return cls(**rs[0])
+        return None
 
     @classmethod
     async def findAll(cls, N=None):

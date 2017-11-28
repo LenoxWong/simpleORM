@@ -9,7 +9,7 @@ import aiomysql
 
 # import asyncio
 # import configs
-# from connection import CREATE_POOL
+# from connect import CREATE_POOL
 # loop = asyncio.get_event_loop()
 # CREATE_POOL(loop, **configs.pool)
 async def CREATE_POOL(loop, **kw):
