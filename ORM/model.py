@@ -3,42 +3,6 @@
 
 __author__ = 'LenoxWong'
 
-# to approach the follow usage:
-#
-# # use class attributes to indicate maps and instance attributes to store the data
-# class User(Model):
-#     '__table__' = 'user'                                                            # table name
-#     uid = IntegerField(name='uid', primary_key=True)
-#     name = StringField(name='name', column_type='VARCHAR(16)')
-#     email = StringField(name='email', column_type='VARCHAR(64)', not_null=False)    # email can be null
-#
-# user = User(uid=1, name='LenoxWong')        # instance
-#
-# user['name']                                # 'LenoxWong'
-# user.name                                   # 'LenoxWong'
-# await user.save()                           # insert the instance into table 'user'
-# user.email = 'Lenox.Wong@gmail.com'
-# user['email']                               # 'Lenox.Wong@gmail.com'
-# user.email                                  # 'Lenox.Wong@gmail.com'
-# await user.update()                         # update the instance in table 'user'
-# await user.remove()                         # remove the instance in table 'user'
-#
-# user1 = User(uid=1, name='LenoxWong')       # ----------- user ------------
-# user2 = User(uid=2, name='Others_1')        # | uid |    name     | email |
-# user3 = User(uid=3, name='Others_2')        # | 1   | 'LenoxWong' |       |
-# await user1.save()                          # | 2   | 'Others_1'  |       |
-# await user2.save()                          # | 3   | 'Others_2'  |       |
-#
-# # class method
-# await User.find(uid=1)                      # user1
-# await User.find(name='Others_1')            # user2
-# await User.find(uid=1, name='LenoxWong')    # user1
-#
-# await User.findAll()                        # (user1, user2, user3)
-# await User.findAll(2)                       # (user1, user2)
-# await User.count()                          # 3
-# await user3.remove()
-# await User.count()                          # 2
 
 import asyncio, logging
 from field import Field
@@ -87,11 +51,18 @@ class ModelMetaclass(type):
         values = ', '.join(values)                          # ?, ?, ?...
         params_and_values = '=?, '.join(fields) + '=?'      # name=?, email=?, ...
         attrs['__select__'] = 'select * from %s' % table_name
-        attrs['__insert__'] = 'insert into %s(%s) values(%s)' % (table_name, params, values)
-        attrs['__update__'] = 'update %s set %s where %s=?' % (table_name, params_and_values, primary_key)
+        attrs['__insert__'] = 'insert into %s(#1) values(#2)' % table_name
+        attrs['__update__'] = 'update %s set # where %s=?' % (table_name, primary_key)
         attrs['__delete__'] = 'delete from %s where %s=?' % (table_name, primary_key)
 
         return type.__new__(cls, name, bases, attrs)
+
+def sql_value(v):
+    if isinstance(v, str):
+        return "'%s'" % v
+    if isinstance(v, bool):
+        return int(v)
+    return v
 
 # Model
 class Model(dict, metaclass=ModelMetaclass):
@@ -139,12 +110,7 @@ class Model(dict, metaclass=ModelMetaclass):
             v_type = type(cls.__mappings__[k].default)
             if not isinstance(v, v_type):
                 raise RuntimeError("Value type of '%s' is Wrong, '%s' needed" % (k, v_type))
-            if isinstance(v, str):
-                format_v.append("'%s'" % v)
-            elif isinstance(v, bool):
-                format_v.append(int(v))
-            else:
-                format_v.append(v)
+            format_v.append(sql_value(v))
             sql += "%s=?, " % k
         sql = sql[:len(sql)-2]
         sql = cls.__select__ + sql
@@ -152,19 +118,57 @@ class Model(dict, metaclass=ModelMetaclass):
         return cls(**rs[0])
 
     @classmethod
-    async def findAll(cls, n):
-        pass
+    async def findAll(cls, N=None):
+        if N is None:
+            rs = await SELECT(cls.__select__, ())
+        elif not isinstance(N, int):
+            raise RuntimeError("Integer type needed!")
+        else:
+            rs = await SELECT(cls.__select__, (), N)
+        return list(cls(**x) for x in rs)
 
     @classmethod
     async def count(cls):
-        pass
+        sql = "select count(%s) _num_ from %s" % (cls.__primary_key__, cls.__table__)
+        rs = await SELECT(sql, (), 1)
+        return rs[0]['_num_']
 
     # instance method
     async def save(self):
-        pass
+        params = []
+        args = []
+        for k, v in self.__mappings__.items():
+            value = self[k]
+            if value is not None:
+                params.append(k)
+                args.append(sql_value(value))
+        values = []
+        for i in range(len(params)):
+            values.append('?')
+        params = ', '.join(params)
+        values = ', '.join(values)
+        sql = self.__insert__.replace('#1', params).replace('#2', values)
+        rs = await EXECUTE(sql, tuple(args))
+        logging.info("inserting success, affected rows: %s" % rs)
 
     async def update(self):
-        pass
+        params = []
+        args = []
+        for k, v in self.__mappings__.items():
+            value = self[k]
+            if value is not None:
+                params.append(k)
+                args.append(sql_value(value))
+        args.append(sql_value(self[self.__primary_key__]))
+        params_and_values = []
+        for i in range(len(params)):
+            params_and_values.append('%s=?' % params[i])
+        params_and_values = ', '.join(params_and_values)
+        sql = self.__update__.replace('#', params_and_values)
+        rs = await EXECUTE(sql, tuple(args))
+        logging.info("updating success, affected rows: %s" % rs)
 
     async def remove(self):
-        pass
+        logging.info("removing %s" % self)
+        rs = await EXECUTE(self.__delete__, (sql_value(self[self.__primary_key__])))
+        logging.info("removing success, affected rows: %s" % rs)

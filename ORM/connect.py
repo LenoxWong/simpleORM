@@ -21,8 +21,10 @@ async def CREATE_POOL(loop, **kw):
 async def DESTROY_POOL():
     global __pool
     if __pool is not None:
+        logging.info("closing the connection pool...")
         __pool.close()
         await __pool.wait_closed()
+        logging.info("connection pool closed")
 
 # sql: =? where a=? ...
 # args: (a, b, c...)
