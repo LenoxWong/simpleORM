@@ -42,6 +42,7 @@ __author__ = 'LenoxWong'
 
 import asyncio, logging
 from field import Field
+from connect import SELECT, EXECUTE
 
 # ModelMetaclass
 class ModelMetaclass(type):
@@ -50,7 +51,7 @@ class ModelMetaclass(type):
         if name == 'Model':
             return type.__new__(cls, name, bases, attrs)
         # get the table name, if there is no attribute called '__table__' then use the model name
-        table_name = attrs.get('__table__', None) or name
+        table_name = attrs.get('__table__', None) or name.lower()
         logging.info("model: %s ==> table: %s" % (name, table_name))
         # find all mappings and the primary key
         mappings = {}       # all mappings
@@ -58,8 +59,10 @@ class ModelMetaclass(type):
         primary_key = None
         for k, v in attrs.items():
             if isinstance(v, Field):
+                if v.name is None:
+                    raise RuntimeError("No table column_name for model '%s' attribute '%s'" % (name, k))
                 mappings[k] = v
-                logging.info('find mapping: %s ==> %s' % (k, v))
+                logging.info("find mapping: %s ==> %s" % (k, v))
                 if v.primary_key is True:
                     if primary_key is not None:
                         raise RuntimeError("Duplicate primary key for model '%s'" % name)
@@ -76,6 +79,18 @@ class ModelMetaclass(type):
         attrs['__mappings__'] = mappings
         attrs['__fields__'] = fields
         attrs['__primary_key__'] = primary_key
+        # sql
+        params = primary_key + ', ' + ', '.join(fields)
+        values = []
+        for i in range(len(fields) + 1):
+            values.append('?')
+        values = ', '.join(values)                          # ?, ?, ?...
+        params_and_values = '=?, '.join(fields) + '=?'      # name=?, email=?, ...
+        attrs['__select__'] = 'select * from %s' % table_name
+        attrs['__insert__'] = 'insert into %s(%s) values(%s)' % (table_name, params, values)
+        attrs['__update__'] = 'update %s set %s where %s=?' % (table_name, params_and_values, primary_key)
+        attrs['__delete__'] = 'delete from %s where %s=?' % (table_name, primary_key)
+
         return type.__new__(cls, name, bases, attrs)
 
 # Model
@@ -113,9 +128,28 @@ class Model(dict, metaclass=ModelMetaclass):
         else:
             raise KeyError("model '%s' has no attribute called '%s'" % (self.__class__.__name__, key))
 
+    # classmethod
     @classmethod
     async def find(cls, **kw):
-        pass
+        sql = ' where '
+        format_v = []
+        for k, v in kw.items():
+            if k not in cls.__mappings__:
+                raise RuntimeError("No map for '%s' in model '%s'" % (k, cls.__name__))
+            v_type = type(cls.__mappings__[k].default)
+            if not isinstance(v, v_type):
+                raise RuntimeError("Value type of '%s' is Wrong, '%s' needed" % (k, v_type))
+            if isinstance(v, str):
+                format_v.append("'%s'" % v)
+            elif isinstance(v, bool):
+                format_v.append(int(v))
+            else:
+                format_v.append(v)
+            sql += "%s=?, " % k
+        sql = sql[:len(sql)-2]
+        sql = cls.__select__ + sql
+        rs = await SELECT(sql, tuple(format_v), 1)
+        return cls(**rs[0])
 
     @classmethod
     async def findAll(cls, n):
@@ -134,20 +168,3 @@ class Model(dict, metaclass=ModelMetaclass):
 
     async def remove(self):
         pass
-
-
-
-from field import IntegerField, StringField
-logging.basicConfig(level=logging.INFO)
-
-class User(Model):
-    __table__ = 'user'
-    uid = IntegerField(name='uid', primary_key=True)
-    name = StringField(name='name', column_type='VARCHAR(16)')
-    email = StringField(name='email', column_type='VARCHAR(64)', not_null=False)
-
-u = User(name='lenox')
-print(u['uid'], u.uid, u['name'], u.name, u['email'], u.email)
-u.email = 'gmail'
-u.uid = 123
-print(u['uid'], u.uid, u['name'], u.name, u['email'], u.email)
